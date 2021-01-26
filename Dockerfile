@@ -1,5 +1,8 @@
 # docker run -d -p 8000:8000 alseambusher/crontab-ui
-FROM alpine:3.10
+# To set multiarch build for Docker hub automated build.
+FROM --platform=$TARGETPLATFORM alpine:3.10 AS runtime
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 
 ENV   CRON_PATH /etc/crontabs
 
