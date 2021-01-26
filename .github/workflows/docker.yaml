@@ -1,0 +1,112 @@
+name: Publish Docker Image
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - '*'
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+        with:
+          platforms: all
+
+      - name: Set up docker buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          version: latest
+
+      # Setup the Github Actions cache.
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildxarch-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildxarch-
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Login to Github Package
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.PACKAGE_TOKEN }}
+
+      # the arm64 is of course much slower due to qemu, so build and push amd64 **first**
+      # due to the way manifests work, the gap between this and the complete push below
+      #  could result in pull failures or inconsistencies for arm64, such is life.
+      # further duplicated by building both release and debug builds
+      - name: Build master branch and push for amd64
+        if: github.ref == 'refs/heads/master'
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: '${{ secrets.DOCKERHUB_USERNAME }}/crontab-ui:latest,ghcr.io/${{ github.repository_owner }}/crontab-ui:latest'
+          cache-from: type=local,src=/tmp/.buildx-cache
+
+      - name: Build master branch and push for multiarch
+        if: github.ref == 'refs/heads/master'
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm/v7,linux/arm64
+          push: true
+          tags: '${{ secrets.DOCKERHUB_USERNAME }}/crontab-ui:latest,ghcr.io/${{ github.repository_owner }}/crontab-ui:latest'
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: Get all docker tags
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/github-script@v3
+        id: tags
+        with:
+          script: |
+            const ref = `${context.payload.ref.replace(/\/?refs\/tags\//, '')}`
+            const tags = [
+              `${{ secrets.DOCKERHUB_USERNAME }}/crontab-ui:${ref}`,
+              `ghcr.io/${{ github.repository_owner }}/crontab-ui:${ref}`
+            ]
+            return tags.join(',')
+          result-encoding: string
+
+      - name: Build release and push for amd64
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{steps.tags.outputs.result}}
+          cache-from: type=local,src=/tmp/.buildx-cache
+
+      - name: Build release and push for multiarch
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm/v7,linux/arm64
+          push: true
+          tags: ${{steps.tags.outputs.result}}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
